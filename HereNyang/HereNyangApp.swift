@@ -2,7 +2,7 @@
 //  HereNyangApp.swift
 //  HereNyang
 //
-//  Created by 이 진실 on 8/24/26.
+//  Created by 임태준 on 8/24/26.
 //
 
 import SwiftUI
