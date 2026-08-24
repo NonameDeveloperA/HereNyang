@@ -1,6 +1,6 @@
 //
 //  LiveActivityController.swift
-//  velopvelopDevelop
+//  HereNyang
 //
 //  Live Activity(다이나믹 아일랜드/잠금화면 표시)의 시작·갱신·종료만 담당.
 //  실제 화면 레이아웃은 Widget Extension 타겟이 추가되기 전까지는 렌더링되지 않지만,

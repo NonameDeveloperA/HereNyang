@@ -1,6 +1,6 @@
 //
-//  velopvelopDevelopApp.swift
-//  velopvelopDevelop
+//  HereNyangApp.swift
+//  HereNyang
 //
 //  Created by 이 진실 on 8/24/26.
 //
@@ -8,7 +8,7 @@
 import SwiftUI
 
 @main
-struct velopvelopDevelopApp: App {
+struct HereNyangApp: App {
     init() {
         NotificationManager.shared.requestAuthorization()
     }

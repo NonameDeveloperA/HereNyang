@@ -1,6 +1,6 @@
 //
 //  NotificationManager.swift
-//  velopvelopDevelop
+//  HereNyang
 //
 //  집/회사 도착·이탈을 로컬 알림으로 보여준다. 서버나 APNs 없이 기기에서 바로 처리하는
 //  로컬 알림(local notification)이며, 원격 push가 필요해지면 이 부분만 교체하면 됨.

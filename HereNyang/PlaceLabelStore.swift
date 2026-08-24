@@ -1,6 +1,6 @@
 //
 //  PlaceLabelStore.swift
-//  velopvelopDevelop
+//  HereNyang
 //
 //  다이나믹 아일랜드/알림에 표시할 집·회사 문구를 사용자가 직접 지정할 수 있게 저장한다.
 //

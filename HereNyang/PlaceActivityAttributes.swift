@@ -1,6 +1,6 @@
 //
 //  PlaceActivityAttributes.swift
-//  velopvelopDevelop
+//  HereNyang
 //
 //  다이나믹 아일랜드/잠금화면에 표시할 Live Activity의 데이터 모델.
 //  실제 화면(UI)은 나중에 추가할 Widget Extension 타겟에서 이 타입을 그대로 가져다 씀.

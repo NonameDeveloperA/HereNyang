@@ -1,6 +1,6 @@
 //
 //  LocationManager.swift
-//  velopvelopDevelop
+//  HereNyang
 //
 //  집/회사 좌표를 저장해두고, 지오펜스(반경 진입·이탈)로 도착/출발을 감지한다.
 //  GPS를 계속 추적하는 게 아니라 iOS가 배터리 효율적으로 관리하는 region monitoring에

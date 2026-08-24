@@ -4,7 +4,7 @@
 //
 //  Created by 이 진실 on 8/24/26.
 //
-//  PlaceActivityAttributes는 velopvelopDevelop 앱 타겟에 있는 걸 그대로 씀.
+//  PlaceActivityAttributes는 HereNyang 앱 타겟에 있는 걸 그대로 씀.
 //  (Xcode에서 그 파일의 Target Membership에 PlaceWidgetExtension도 체크해둬야 컴파일됨)
 //
 
