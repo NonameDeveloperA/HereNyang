@@ -18,13 +18,13 @@ final class LiveActivityController {
 
     private init() {}
 
-    func update(place: Place, label: String) {
+    func update(place: Place, label: String, icon: PlaceIcon? = nil) {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
-            print("Live Activity가 비활성화되어 있습니다. (설정 > 지하섬 앱 > Live Activities 확인 필요)")
+            print("Live Activity가 비활성화되어 있습니다. (설정 > 여기냥 앱 > Live Activities 확인 필요)")
             return
         }
 
-        let state = PlaceActivityAttributes.ContentState(place: place, label: label, updatedAt: Date())
+        let state = PlaceActivityAttributes.ContentState(place: place, label: label, icon: icon, updatedAt: Date())
 
         if let activity {
             Task {

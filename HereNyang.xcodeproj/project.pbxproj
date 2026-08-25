@@ -55,6 +55,8 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				PlaceActivityAttributes.swift,
+				"Assets.xcassets/home.imageset",
+				"Assets.xcassets/work.imageset",
 			);
 			target = 128D5B21303BE08C00F27BFF /* PlaceWidgetExtension */;
 		};

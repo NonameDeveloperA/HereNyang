@@ -6,22 +6,26 @@
 //
 
 import CoreLocation
+import MapKit
 import SwiftUI
 
 // 시뮬레이터/기기에 실제로 최신 빌드가 설치됐는지 눈으로 바로 확인하기 위한 마커.
 // 코드 수정할 때마다 이 문자열을 갱신함.
-private let buildMarker = "Build 2026-08-24 21:10"
+private let buildMarker = "Build 2026-08-25"
 
-private enum LabelField: Hashable {
-    case home
-    case work
+private enum FocusField: Hashable {
+    case place(UUID)
 }
 
 struct ContentView: View {
     @StateObject private var locationManager = LocationManager()
-    @State private var homeLabel: String = PlaceLabelStore.label(for: .home)
-    @State private var workLabel: String = PlaceLabelStore.label(for: .work)
-    @FocusState private var focusedField: LabelField?
+    @ObservedObject private var placeStore = PlaceStore.shared
+    // 이름은 개수가 가변적이라 id별 임시 입력값을 들고 있다가 제출/포커스 이탈 시점에만
+    // 스토어에 반영한다. (한글 조합 중간값 저장 방지)
+    @State private var nameDrafts: [UUID: String] = [:]
+    @FocusState private var focusedField: FocusField?
+    @State private var pendingDelete: SavedPlace?
+    @State private var mapPickerPlace: SavedPlace?
 
     var body: some View {
         NavigationStack {
@@ -46,49 +50,60 @@ struct ContentView: View {
                     }
                 }
 
-                Section("집 / 회사 설정") {
-                    LabeledContent("집") {
-                        Text(locationManager.homeCoordinate == nil ? "설정 안 됨" : "설정됨")
-                            .foregroundStyle(locationManager.homeCoordinate == nil ? Color.secondary : Color.green)
-                    }
-                    Button("현재 위치를 집으로 저장") {
-                        locationManager.saveCurrentLocation(as: .home)
+                Section("장소 (최대 \(PlaceStore.maxCount)개, 이름 \(PlaceStore.maxNameLength)자)") {
+                    ForEach(placeStore.places) { place in
+                        HStack {
+                            IconPickerButton(selectedIcon: place.icon) { newIcon in
+                                placeStore.updateIcon(id: place.id, icon: newIcon)
+                            }
+                            TextField("장소 이름", text: nameBinding(for: place.id))
+                                .focused($focusedField, equals: .place(place.id))
+                                .submitLabel(.done)
+                                .onSubmit { commitName(for: place.id) }
+
+                            // 탭하면 현재 위치로 저장/갱신.
+                            Button(place.coordinate == nil ? "위치 설정 안 됨" : "위치 설정됨") {
+                                locationManager.saveCurrentLocation(for: place.id)
+                            }
+                            .font(.caption)
+                            .foregroundStyle(place.coordinate == nil ? Color.secondary : Color.green)
+                            .buttonStyle(.plain)
+                        }
+                        .id(FocusField.place(place.id))
+                        .contextMenu {
+                            Button {
+                                mapPickerPlace = place
+                            } label: {
+                                Label("지도에서 선택", systemImage: "map")
+                            }
+                            Button(role: .destructive) {
+                                pendingDelete = place
+                            } label: {
+                                Label("삭제", systemImage: "trash")
+                            }
+                        }
+                        .swipeActions {
+                            Button(role: .destructive) {
+                                pendingDelete = place
+                            } label: {
+                                Label("삭제", systemImage: "trash")
+                            }
+                        }
                     }
 
-                    LabeledContent("회사") {
-                        Text(locationManager.workCoordinate == nil ? "설정 안 됨" : "설정됨")
-                            .foregroundStyle(locationManager.workCoordinate == nil ? Color.secondary : Color.green)
+                    if placeStore.canAddMore {
+                        Button("새 장소 추가") {
+                            placeStore.add()
+                        }
+                    } else {
+                        Text("최대 \(PlaceStore.maxCount)개까지 등록할 수 있어요.")
+                            .foregroundStyle(.secondary)
                     }
-                    Button("현재 위치를 회사로 저장") {
-                        locationManager.saveCurrentLocation(as: .work)
-                    }
-                }
-
-                Section("표시 문구 (최대 \(PlaceLabelStore.maxLength)자)") {
-                    LabeledContent("집") {
-                        TextField("집", text: $homeLabel)
-                            .multilineTextAlignment(.trailing)
-                            .focused($focusedField, equals: .home)
-                            .submitLabel(.done)
-                            .onSubmit { commitLabel(&homeLabel, for: .home) }
-                    }
-                    .id(LabelField.home)
-
-                    LabeledContent("회사") {
-                        TextField("회사", text: $workLabel)
-                            .multilineTextAlignment(.trailing)
-                            .focused($focusedField, equals: .work)
-                            .submitLabel(.done)
-                            .onSubmit { commitLabel(&workLabel, for: .work) }
-                    }
-                    .id(LabelField.work)
                 }
                 .onChange(of: focusedField) { oldField, newField in
                     // 다른 곳을 눌러서 포커스가 빠질 때(Enter 없이)도 저장되도록.
-                    switch oldField {
-                    case .home: commitLabel(&homeLabel, for: .home)
-                    case .work: commitLabel(&workLabel, for: .work)
-                    case nil: break
+                    if case .place(let id) = oldField {
+                        commitName(for: id)
                     }
                     // 키보드가 뜬 다음, 포커스된 입력칸을 화면(키보드 제외) 가운데로 스크롤.
                     if let newField {
@@ -99,9 +114,40 @@ struct ContentView: View {
                         }
                     }
                 }
+                .confirmationDialog(
+                    "\"\(pendingDelete?.name ?? "")\" 삭제",
+                    isPresented: Binding(
+                        get: { pendingDelete != nil },
+                        set: { isPresented in if !isPresented { pendingDelete = nil } }
+                    ),
+                    titleVisibility: .visible
+                ) {
+                    Button("삭제", role: .destructive) {
+                        if let place = pendingDelete {
+                            nameDrafts[place.id] = nil
+                            locationManager.removePlace(id: place.id)
+                        }
+                        pendingDelete = nil
+                    }
+                    Button("취소", role: .cancel) { pendingDelete = nil }
+                } message: {
+                    Text("이 장소를 목록에서 삭제합니다. 되돌릴 수 없어요.")
+                }
+                .alert(
+                    "위치를 저장할 수 없어요",
+                    isPresented: Binding(
+                        get: { locationManager.locationConflictMessage != nil },
+                        set: { isPresented in if !isPresented { locationManager.locationConflictMessage = nil } }
+                    ),
+                    presenting: locationManager.locationConflictMessage
+                ) { _ in
+                    Button("확인") { locationManager.locationConflictMessage = nil }
+                } message: { message in
+                    Text(message)
+                }
 
                 Section("현재 상태") {
-                    LabeledContent("위치", value: PlaceLabelStore.label(for: locationManager.currentPlace))
+                    LabeledContent("위치", value: locationManager.currentLabel)
                 }
 
                 // 리스트 맨 아래 필드도 화면 가운데까지 끌어올릴 수 있도록 스크롤 여유 공간 확보.
@@ -111,17 +157,31 @@ struct ContentView: View {
                     .listRowSeparator(.hidden)
             }
             .navigationTitle("여기냥 HereNyang")
+            .sheet(item: $mapPickerPlace) { place in
+                MapLocationPickerSheet(place: place) { coordinate in
+                    locationManager.saveLocation(coordinate, for: place.id)
+                }
+            }
             }
         }
     }
 
+    private func nameBinding(for id: UUID) -> Binding<String> {
+        Binding(
+            get: { nameDrafts[id] ?? placeStore.places.first(where: { $0.id == id })?.name ?? "" },
+            set: { nameDrafts[id] = $0 }
+        )
+    }
+
     // 한글 조합(IME) 도중에 매 키 입력마다 저장하면 조합 중간값이 저장되는 문제가 있어서,
     // 입력이 끝난 시점(Enter 또는 포커스 이탈)에만 길이 제한 + 저장을 한 번에 처리한다.
-    private func commitLabel(_ text: inout String, for place: Place) {
-        if text.count > PlaceLabelStore.maxLength {
-            text = String(text.prefix(PlaceLabelStore.maxLength))
+    private func commitName(for id: UUID) {
+        guard var text = nameDrafts[id] else { return }
+        if text.count > PlaceStore.maxNameLength {
+            text = String(text.prefix(PlaceStore.maxNameLength))
+            nameDrafts[id] = text
         }
-        PlaceLabelStore.setLabel(text, for: place)
+        placeStore.updateName(id: id, name: text)
     }
 
     private var authorizationStatusText: String {
@@ -132,6 +192,73 @@ struct ContentView: View {
         case .denied: return "거부됨"
         case .restricted: return "제한됨"
         @unknown default: return "알 수 없음"
+        }
+    }
+}
+
+// 장소 행 컨텍스트 메뉴의 "지도에서 선택"을 누르면 뜨는 화면. 지도를 탭해서 핀을 옮기고
+// 저장을 눌러야 실제로 반영된다(취소하면 원래 좌표 그대로).
+private struct MapLocationPickerSheet: View {
+    let place: SavedPlace
+    let onSave: (CLLocationCoordinate2D) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var pickedCoordinate: CLLocationCoordinate2D
+    @State private var cameraPosition: MapCameraPosition
+
+    init(place: SavedPlace, onSave: @escaping (CLLocationCoordinate2D) -> Void) {
+        self.place = place
+        self.onSave = onSave
+        // 저장된 위치가 없으면 서울시청 근방을 기본값으로 보여준다.
+        let initialCoordinate = place.coordinate ?? CLLocationCoordinate2D(latitude: 37.5665, longitude: 126.9780)
+        _pickedCoordinate = State(initialValue: initialCoordinate)
+        _cameraPosition = State(initialValue: .region(
+            MKCoordinateRegion(center: initialCoordinate, latitudinalMeters: 800, longitudinalMeters: 800)
+        ))
+    }
+
+    var body: some View {
+        NavigationStack {
+            MapReader { proxy in
+                Map(position: $cameraPosition) {
+                    Marker(place.name, coordinate: pickedCoordinate)
+                    // 실제 지오펜스 반경(150m)을 지도 좌표계에 그려서, 확대/축소해도
+                    // 화면 픽셀이 아니라 실제 거리 기준으로 자동으로 크기가 맞춰지게 한다.
+                    MapCircle(center: pickedCoordinate, radius: LocationManager.regionRadius)
+                        .foregroundStyle(Color.accentColor.opacity(0.15))
+                        .stroke(Color.accentColor, lineWidth: 2)
+                }
+                // onTapGesture 대신 simultaneousGesture를 써야 지도 기본 제스처(핀치 확대/축소,
+                // 드래그)를 가로채지 않는다. onTapGesture는 독점 제스처라 지도 내장 제스처와 충돌한다.
+                .simultaneousGesture(
+                    SpatialTapGesture().onEnded { value in
+                        if let coordinate = proxy.convert(value.location, from: .local) {
+                            pickedCoordinate = coordinate
+                        }
+                    }
+                )
+            }
+            .navigationTitle("\(place.name) 위치 선택")
+            .navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .bottom) {
+                Text("지도를 탭해서 위치를 옮길 수 있어요")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity)
+                    .background(.bar)
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("취소") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("저장") {
+                        onSave(pickedCoordinate)
+                        dismiss()
+                    }
+                }
+            }
         }
     }
 }
