@@ -7,6 +7,7 @@
 //  의존하기 때문에, 앱이 백그라운드거나 종료된 상태에서도 진입/이탈 시점에만 깨어난다.
 //
 
+import Combine
 import CoreLocation
 import Foundation
 
@@ -25,6 +26,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     private var pendingLocationSaveID: UUID?
     // 진입 이벤트가 반복해서 들어올 때 같은 장소로의 재알림을 막기 위한 현재 위치 region 식별자.
     private var currentRegionID: String?
+    private var placesCancellable: AnyCancellable?
 
     override init() {
         authorizationStatus = manager.authorizationStatus
@@ -32,6 +34,30 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         manager.delegate = self
         manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
         refreshRegions()
+
+        // 지금 머물러 있는 장소의 이름/아이콘이 바뀌면(진입/이탈 이벤트 없이도) Live Activity에
+        // 바로 반영되도록, 장소 목록이 바뀔 때마다 현재 장소 기준으로 다시 밀어준다.
+        // @Published가 값이 바뀌는 바로 그 순간(willSet)에 동기적으로 알려주는데, 그 시점은
+        // 아이콘 피커가 닫히고 리스트 행이 다시 그려지는 SwiftUI 화면 전환이 겹치는 시점이라,
+        // 같은 타이밍에 restart()를 부르면 비동기 작업이 화면 전환에 밀려 늦게/불안정하게
+        // 실행된다. 한 런루프 턴 미뤄서, 수동으로 버튼 누를 때와 같은 "독립된" 타이밍에
+        // 실행되게 한다.
+        placesCancellable = PlaceStore.shared.$places
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.refreshCurrentPlaceIfNeeded()
+                }
+            }
+    }
+
+    private func refreshCurrentPlaceIfNeeded() {
+        guard let regionID = currentRegionID,
+              let place = PlaceStore.shared.place(withRegionIdentifier: regionID) else { return }
+        currentLabel = place.name
+        // update()만 부르면 이미지가 바뀌었을 때 반영이 몇 번 왔다갔다 해야 될 정도로 늦거나
+        // 아예 갱신이 안 되는 경우가 있어서(시스템 쪽 렌더링 캐시 문제로 추정), 아이콘/이름이
+        // 바뀔 때는 항상 끝내고 새로 시작해서 즉시 반영되게 한다.
+        LiveActivityController.shared.restart(place: .saved, label: place.name, icon: place.icon)
     }
 
     // MARK: - 권한
@@ -46,6 +72,14 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         }
     }
 
+    // 지금 있는 장소의 Live Activity가 시스템 캐시에 꼬여서 안 바뀔 때, 완전히 끝내고
+    // 새로 시작해서 우회한다.
+    func restartLiveActivity() {
+        guard let regionID = currentRegionID,
+              let place = PlaceStore.shared.place(withRegionIdentifier: regionID) else { return }
+        LiveActivityController.shared.restart(place: .saved, label: place.name, icon: place.icon)
+    }
+
     // MARK: - 장소 위치 저장 / 삭제
 
     func saveCurrentLocation(for placeID: UUID) {
@@ -58,6 +92,21 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         trySaveLocation(coordinate, for: placeID)
     }
 
+    // 장소는 남겨두고 위치만 지운다. 지금 그 장소에 있는 상태였다면(지오펜스가 없어지면서
+    // 이탈 이벤트가 따로 안 오니) 여기서 직접 "이동 중"으로 정리해준다.
+    func clearLocation(for placeID: UUID) {
+        guard let place = PlaceStore.shared.places.first(where: { $0.id == placeID }) else { return }
+        let wasCurrent = currentRegionID == place.regionIdentifier
+        PlaceStore.shared.clearLocation(id: placeID)
+        refreshRegions()
+        if wasCurrent {
+            currentRegionID = nil
+            currentPlace = .away
+            currentLabel = Place.away.displayName
+            LiveActivityController.shared.update(place: .away, label: Place.away.displayName)
+        }
+    }
+
     func removePlace(id: UUID) {
         PlaceStore.shared.remove(id: id)
         refreshRegions()
@@ -65,7 +114,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
     // 서로 다른 두 장소가 반경(150m) 이상 겹치면 두 지오펜스가 동시에 걸쳐 있는 지점이 생겨서,
     // 그 지점에 들어갈 때 두 region의 진입 이벤트가 번갈아 발생해 알림/Live Activity가
-    // 여러 번 울리는 문제가 생긴다. 그래서 두 반경이 절대 겹치지 않는 거리(반경의 2배)보다
+    // 여러 번 울리는 문제가 생긴다. 그래서 두ㄴ 반경이 절대 겹치지 않는 거리(반경의 2배)보다
     // 가까우면 저장을 거부한다.
     private func trySaveLocation(_ coordinate: CLLocationCoordinate2D, for placeID: UUID) {
         let newLocation = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)

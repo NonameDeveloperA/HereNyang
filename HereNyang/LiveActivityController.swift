@@ -16,7 +16,15 @@ final class LiveActivityController {
 
     private var activity: Activity<PlaceActivityAttributes>?
 
-    private init() {}
+    private init() {
+        // 예전 프로세스가 띄워둔 Live Activity가 남아있을 수 있는데, 그 사이 앱/위젯이 새로
+        // 빌드되면서 ContentState 구조가 바뀌었을 수도 있어서 그대로 이어받지 않고 정리한다.
+        // 아직 그 장소에 머물러 있다면 LocationManager가 앱 시작 직후 지오펜스 상태를 다시
+        // 조회해서(didDetermineState) 곧바로 새 Live Activity를 깨끗한 상태로 다시 띄워준다.
+        for stale in Activity<PlaceActivityAttributes>.activities {
+            Task { await stale.end(nil, dismissalPolicy: .immediate) }
+        }
+    }
 
     func update(place: Place, label: String, icon: PlaceIcon? = nil) {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
@@ -48,5 +56,20 @@ final class LiveActivityController {
             await activity.end(nil, dismissalPolicy: .immediate)
         }
         self.activity = nil
+    }
+
+    // 짧은 시간에 갱신을 여러 번 연달아 보내면, 그 activity 인스턴스의 시스템 쪽 렌더링이
+    // 캐시에 낀 채로 다시 안 풀리는 경우가 있다. 그럴 때 기존 걸 완전히 끝내고 새 activity를
+    // 처음부터 다시 만들어서 우회한다.
+    func restart(place: Place, label: String, icon: PlaceIcon? = nil) {
+        guard let activity else {
+            update(place: place, label: label, icon: icon)
+            return
+        }
+        Task {
+            await activity.end(nil, dismissalPolicy: .immediate)
+            self.activity = nil
+            update(place: place, label: label, icon: icon)
+        }
     }
 }

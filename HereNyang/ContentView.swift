@@ -25,6 +25,7 @@ struct ContentView: View {
     @State private var nameDrafts: [UUID: String] = [:]
     @FocusState private var focusedField: FocusField?
     @State private var pendingDelete: SavedPlace?
+    @State private var pendingLocationClear: SavedPlace?
     @State private var mapPickerPlace: SavedPlace?
 
     var body: some View {
@@ -61,9 +62,15 @@ struct ContentView: View {
                                 .submitLabel(.done)
                                 .onSubmit { commitName(for: place.id) }
 
-                            // 탭하면 현재 위치로 저장/갱신.
+                            // 아직 위치가 없으면 탭해서 현재 위치로 저장. 이미 설정된 상태면
+                            // 실수로 조용히 덮어쓰지 않도록, 탭하면 삭제 확인 팝업을 띄운다
+                            // (위치를 바꾸고 싶을 땐 길게 눌러서 "지도에서 선택"으로).
                             Button(place.coordinate == nil ? "위치 설정 안 됨" : "위치 설정됨") {
-                                locationManager.saveCurrentLocation(for: place.id)
+                                if place.coordinate == nil {
+                                    locationManager.saveCurrentLocation(for: place.id)
+                                } else {
+                                    pendingLocationClear = place
+                                }
                             }
                             .font(.caption)
                             .foregroundStyle(place.coordinate == nil ? Color.secondary : Color.green)
@@ -76,10 +83,17 @@ struct ContentView: View {
                             } label: {
                                 Label("지도에서 선택", systemImage: "map")
                             }
+                            if place.coordinate != nil {
+                                Button(role: .destructive) {
+                                    pendingLocationClear = place
+                                } label: {
+                                    Label("위치 삭제", systemImage: "location.slash")
+                                }
+                            }
                             Button(role: .destructive) {
                                 pendingDelete = place
                             } label: {
-                                Label("삭제", systemImage: "trash")
+                                Label("장소 삭제", systemImage: "trash")
                             }
                         }
                         .swipeActions {
@@ -133,6 +147,24 @@ struct ContentView: View {
                 } message: {
                     Text("이 장소를 목록에서 삭제합니다. 되돌릴 수 없어요.")
                 }
+                .confirmationDialog(
+                    "위치를 삭제할까요?",
+                    isPresented: Binding(
+                        get: { pendingLocationClear != nil },
+                        set: { isPresented in if !isPresented { pendingLocationClear = nil } }
+                    ),
+                    titleVisibility: .visible
+                ) {
+                    Button("위치 삭제", role: .destructive) {
+                        if let place = pendingLocationClear {
+                            locationManager.clearLocation(for: place.id)
+                        }
+                        pendingLocationClear = nil
+                    }
+                    Button("취소", role: .cancel) { pendingLocationClear = nil }
+                } message: {
+                    Text("\"\(pendingLocationClear?.name ?? "")\"의 저장된 위치만 지워져요. 장소 자체(이름·아이콘)는 남아있어요.")
+                }
                 .alert(
                     "위치를 저장할 수 없어요",
                     isPresented: Binding(
@@ -146,8 +178,19 @@ struct ContentView: View {
                     Text(message)
                 }
 
-                Section("현재 상태") {
+                Section {
                     LabeledContent("위치", value: locationManager.currentLabel)
+                    if locationManager.currentPlace == .saved {
+                        Button("Live Activity 다시 시작") {
+                            locationManager.restartLiveActivity()
+                        }
+                    }
+                } header: {
+                    Text("현재 상태")
+                } footer: {
+                    if locationManager.currentPlace == .saved {
+                        Text("다이나믹 아일랜드/잠금화면이 안 바뀌고 그대로일 때 눌러주세요.")
+                    }
                 }
 
                 // 리스트 맨 아래 필드도 화면 가운데까지 끌어올릴 수 있도록 스크롤 여유 공간 확보.

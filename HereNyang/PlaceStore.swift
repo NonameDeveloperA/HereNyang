@@ -85,6 +85,14 @@ final class PlaceStore: ObservableObject {
         save()
     }
 
+    // 장소는 그대로 두고 좌표만 지운다. (장소 자체를 지우는 remove(id:)와는 다름)
+    func clearLocation(id: UUID) {
+        guard let index = places.firstIndex(where: { $0.id == id }) else { return }
+        places[index].latitude = nil
+        places[index].longitude = nil
+        save()
+    }
+
     func place(withRegionIdentifier identifier: String) -> SavedPlace? {
         places.first { $0.regionIdentifier == identifier }
     }
