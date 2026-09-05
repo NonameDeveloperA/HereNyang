@@ -13,7 +13,7 @@ import Foundation
 
 @MainActor
 final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
-    static let regionRadius: CLLocationDistance = 150
+    static let regionRadius: CLLocationDistance = 50
 
     @Published private(set) var authorizationStatus: CLAuthorizationStatus
     @Published private(set) var currentPlace: Place = .unknown
@@ -24,6 +24,8 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     private let manager = CLLocationManager()
     // "현재 위치로 저장"을 누른 장소의 id. GPS 결과가 오면 이 장소의 좌표를 갱신한다.
     private var pendingLocationSaveID: UUID?
+    // 지도 피커를 열었을 때 현재 GPS 위치로 화면을 옮기기 위한 1회성 콜백.
+    private var oneTimeLocationCompletion: ((CLLocationCoordinate2D) -> Void)?
     // 진입 이벤트가 반복해서 들어올 때 같은 장소로의 재알림을 막기 위한 현재 위치 region 식별자.
     private var currentRegionID: String?
     private var placesCancellable: AnyCancellable?
@@ -87,6 +89,12 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         manager.requestLocation()
     }
 
+    // 지도 피커가 뜰 때 현재 GPS 위치로 카메라를 옮기기 위해 1회 호출한다.
+    func requestCurrentLocationOnce(completion: @escaping (CLLocationCoordinate2D) -> Void) {
+        oneTimeLocationCompletion = completion
+        manager.requestLocation()
+    }
+
     // 지도에서 직접 고른 좌표를 저장할 때도 GPS로 저장할 때와 동일한 근접 검사를 거친다.
     func saveLocation(_ coordinate: CLLocationCoordinate2D, for placeID: UUID) {
         trySaveLocation(coordinate, for: placeID)
@@ -112,7 +120,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         refreshRegions()
     }
 
-    // 서로 다른 두 장소가 반경(150m) 이상 겹치면 두 지오펜스가 동시에 걸쳐 있는 지점이 생겨서,
+    // 서로 다른 두 장소가 반경(regionRadius) 이상 겹치면 두 지오펜스가 동시에 걸쳐 있는 지점이 생겨서,
     // 그 지점에 들어갈 때 두 region의 진입 이벤트가 번갈아 발생해 알림/Live Activity가
     // 여러 번 울리는 문제가 생긴다. 그래서 두ㄴ 반경이 절대 겹치지 않는 거리(반경의 2배)보다
     // 가까우면 저장을 거부한다.
@@ -158,9 +166,15 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard let placeID = pendingLocationSaveID, let location = locations.last else { return }
-        pendingLocationSaveID = nil
-        trySaveLocation(location.coordinate, for: placeID)
+        guard let location = locations.last else { return }
+        if let placeID = pendingLocationSaveID {
+            pendingLocationSaveID = nil
+            trySaveLocation(location.coordinate, for: placeID)
+        }
+        if let completion = oneTimeLocationCompletion {
+            oneTimeLocationCompletion = nil
+            completion(location.coordinate)
+        }
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {

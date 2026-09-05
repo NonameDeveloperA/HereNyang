@@ -15,6 +15,10 @@ final class LiveActivityController {
     static let shared = LiveActivityController()
 
     private var activity: Activity<PlaceActivityAttributes>?
+    private var activityStartedAt: Date?
+    // iOS가 8시간 지난 Live Activity는 강제로 끝내버려서, 그 전에 미리 끝내고 새로 시작해
+    // 시계를 리셋한다.
+    private static let maxActivityDuration: TimeInterval = 7 * 60 * 60
 
     private init() {
         // 예전 프로세스가 띄워둔 Live Activity가 남아있을 수 있는데, 그 사이 앱/위젯이 새로
@@ -32,6 +36,11 @@ final class LiveActivityController {
             return
         }
 
+        if let startedAt = activityStartedAt, Date().timeIntervalSince(startedAt) > Self.maxActivityDuration {
+            restart(place: place, label: label, icon: icon)
+            return
+        }
+
         let state = PlaceActivityAttributes.ContentState(place: place, label: label, icon: icon, updatedAt: Date())
 
         if let activity {
@@ -44,6 +53,7 @@ final class LiveActivityController {
                     attributes: PlaceActivityAttributes(),
                     content: ActivityContent(state: state, staleDate: nil)
                 )
+                activityStartedAt = Date()
             } catch {
                 print("Live Activity 시작 실패: \(error)")
             }
@@ -56,12 +66,14 @@ final class LiveActivityController {
             await activity.end(nil, dismissalPolicy: .immediate)
         }
         self.activity = nil
+        activityStartedAt = nil
     }
 
     // 짧은 시간에 갱신을 여러 번 연달아 보내면, 그 activity 인스턴스의 시스템 쪽 렌더링이
     // 캐시에 낀 채로 다시 안 풀리는 경우가 있다. 그럴 때 기존 걸 완전히 끝내고 새 activity를
     // 처음부터 다시 만들어서 우회한다.
     func restart(place: Place, label: String, icon: PlaceIcon? = nil) {
+        activityStartedAt = nil
         guard let activity else {
             update(place: place, label: label, icon: icon)
             return

@@ -57,6 +57,7 @@ struct ContentView: View {
                             IconPickerButton(selectedIcon: place.icon) { newIcon in
                                 placeStore.updateIcon(id: place.id, icon: newIcon)
                             }
+                            .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
                             TextField("장소 이름", text: nameBinding(for: place.id))
                                 .focused($focusedField, equals: .place(place.id))
                                 .submitLabel(.done)
@@ -101,6 +102,7 @@ struct ContentView: View {
                                 pendingDelete = place
                             } label: {
                                 Label("삭제", systemImage: "trash")
+                                    .labelStyle(.iconOnly)
                             }
                         }
                     }
@@ -201,7 +203,7 @@ struct ContentView: View {
             }
             .navigationTitle("여기냥 HereNyang")
             .sheet(item: $mapPickerPlace) { place in
-                MapLocationPickerSheet(place: place) { coordinate in
+                MapLocationPickerSheet(place: place, locationManager: locationManager) { coordinate in
                     locationManager.saveLocation(coordinate, for: place.id)
                 }
             }
@@ -243,16 +245,18 @@ struct ContentView: View {
 // 저장을 눌러야 실제로 반영된다(취소하면 원래 좌표 그대로).
 private struct MapLocationPickerSheet: View {
     let place: SavedPlace
+    let locationManager: LocationManager
     let onSave: (CLLocationCoordinate2D) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var pickedCoordinate: CLLocationCoordinate2D
     @State private var cameraPosition: MapCameraPosition
 
-    init(place: SavedPlace, onSave: @escaping (CLLocationCoordinate2D) -> Void) {
+    init(place: SavedPlace, locationManager: LocationManager, onSave: @escaping (CLLocationCoordinate2D) -> Void) {
         self.place = place
+        self.locationManager = locationManager
         self.onSave = onSave
-        // 저장된 위치가 없으면 서울시청 근방을 기본값으로 보여준다.
+        // 저장된 위치가 없으면 GPS로 현재 위치를 받아올 때까지 임시로 서울시청 근방을 보여준다.
         let initialCoordinate = place.coordinate ?? CLLocationCoordinate2D(latitude: 37.5665, longitude: 126.9780)
         _pickedCoordinate = State(initialValue: initialCoordinate)
         _cameraPosition = State(initialValue: .region(
@@ -265,7 +269,7 @@ private struct MapLocationPickerSheet: View {
             MapReader { proxy in
                 Map(position: $cameraPosition) {
                     Marker(place.name, coordinate: pickedCoordinate)
-                    // 실제 지오펜스 반경(150m)을 지도 좌표계에 그려서, 확대/축소해도
+                    // 실제 지오펜스 반경(regionRadius)을 지도 좌표계에 그려서, 확대/축소해도
                     // 화면 픽셀이 아니라 실제 거리 기준으로 자동으로 크기가 맞춰지게 한다.
                     MapCircle(center: pickedCoordinate, radius: LocationManager.regionRadius)
                         .foregroundStyle(Color.accentColor.opacity(0.15))
@@ -299,6 +303,19 @@ private struct MapLocationPickerSheet: View {
                     Button("저장") {
                         onSave(pickedCoordinate)
                         dismiss()
+                    }
+                }
+            }
+            .onAppear {
+                // 아직 저장된 위치가 없을 때만: 의미 없는 서울시청 기본값 대신 GPS로 받은
+                // 현재 위치로 카메라를 옮겨서, 실제로 있는 곳 근처에서 바로 핀을 고를 수 있게 한다.
+                guard place.coordinate == nil else { return }
+                locationManager.requestCurrentLocationOnce { coordinate in
+                    pickedCoordinate = coordinate
+                    withAnimation {
+                        cameraPosition = .region(
+                            MKCoordinateRegion(center: coordinate, latitudinalMeters: 800, longitudinalMeters: 800)
+                        )
                     }
                 }
             }

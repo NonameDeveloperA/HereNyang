@@ -2,7 +2,8 @@
 //  TriviaSettingsView.swift
 //  HereNyang
 //
-//  "알림냥" 탭. 아침/점심/저녁 상식 알림을 켜고 끄고 시간을 정한다.
+//  "알림냥" 탭. 상식/유머 알림을 켜고 끈다. 시간은 취침시간(23시~8시)을 뺀 나머지
+//  시간대에 1~4시간 랜덤 간격으로 자동으로 잡힌다(TriviaNotificationScheduler).
 //
 
 import SwiftUI
@@ -32,34 +33,16 @@ struct TriviaSettingsView: View {
                 }
 
                 Section {
-                    ForEach(TriviaSlot.allCases) { slot in
-                        let setting = store.setting(for: slot)
-                        HStack {
-                            // 라벨 폭을 고정해서 "아침/점심/저녁" 글자폭이 달라도 시간 버튼이
-                            // 항상 같은 x 위치에서 시작하도록 정렬한다.
-                            Text(slot.displayName)
-                                .frame(width: 44, alignment: .leading)
-                            if setting.isEnabled {
-                                DatePicker(
-                                    "시간",
-                                    selection: timeBinding(for: slot),
-                                    displayedComponents: .hourAndMinute
-                                )
-                                .labelsHidden()
-                            }
-                            Spacer()
-                            Toggle("", isOn: Binding(
-                                get: { setting.isEnabled },
-                                set: { store.setEnabled($0, for: slot) }
-                            ))
-                            .labelsHidden()
-                            .scaleEffect(0.8)
-                        }
-                    }
+                    Toggle("상식/유머 알림", isOn: Binding(
+                        get: { store.isEnabled },
+                        set: { store.isEnabled = $0 }
+                    ))
                 } header: {
-                    Text("상식 알림 (최대 \(TriviaSlot.allCases.count)회/일)")
+                    Text("상식/유머")
                 } footer: {
-                    Text("설정한 시간에 짧은 상식 한 줄을 알림으로 보내드려요. 앞으로 7일치를 미리 예약해두고, 앱을 열 때마다 자동으로 채워 넣어요.")
+                    // SwiftUI Text(String)는 마크다운으로 파싱돼서, "~"가 두 번 들어간 문장은
+                    // 그 사이 구간이 취소선(GFM 문법)으로 잘못 렌더링된다. Text(verbatim:)로 우회.
+                    Text(verbatim: store.isEnabled ? "상식과 유머를 내마음대로 말한다냥." : "꺼두면 조용히 있는다냥.")
                 }
 
                 Section {
@@ -78,26 +61,9 @@ struct TriviaSettingsView: View {
         }
     }
 
-    private func timeBinding(for slot: TriviaSlot) -> Binding<Date> {
-        Binding(
-            get: {
-                let setting = store.setting(for: slot)
-                var comps = DateComponents()
-                comps.hour = setting.hour
-                comps.minute = setting.minute
-                return Calendar.current.date(from: comps) ?? Date()
-            },
-            set: { newDate in
-                let comps = Calendar.current.dateComponents([.hour, .minute], from: newDate)
-                store.setTime(hour: comps.hour ?? 0, minute: comps.minute ?? 0, for: slot)
-            }
-        )
-    }
-
     private func sendTestNotification() {
         let content = UNMutableNotificationContent()
-        content.title = "상식 알림 미리보기"
-        content.body = TriviaCatalog.facts.randomElement() ?? "상식을 준비하지 못했어요."
+        content.body = TriviaCatalog.facts.randomElement() ?? "상식을 준비하지 못했다냥."
         content.sound = .default
         let request = UNNotificationRequest(
             identifier: "trivia-preview-\(UUID().uuidString)",
