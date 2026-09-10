@@ -13,18 +13,20 @@ import WidgetKit
 import SwiftUI
 
 // 저장된 장소(.saved)는 항상 state.icon이 채워져서 온다(장소를 만들 때 기본 아이콘이 붙으므로).
-// 이동중/알 수 없음처럼 특정 장소가 아닌 상태만 고정 심볼로 대체 표시한다.
+// "이동 중"은 resolvedImageName에서 walk 일러스트로 처리되므로 여기까지 오지 않고,
+// 남는 건 사실상 "알 수 없음"뿐이라 물음표 심볼로 대체 표시한다.
 private func fallbackSymbolName(for place: Place) -> String {
     switch place {
     case .saved: return "mappin.circle.fill"
-    case .away: return "figure.walk"
-    case .unknown: return "questionmark.circle.fill"
+    case .away, .unknown: return "questionmark.circle.fill"
     }
 }
 
 private func resolvedImageName(for state: PlaceActivityAttributes.ContentState) -> String? {
-    guard let icon = state.icon, icon.kind == .image else { return nil }
-    return icon.name
+    if let icon = state.icon, icon.kind == .image { return icon.name }
+    // "이동 중"은 특정 장소가 아니라 icon이 nil로 오지만, 산책하는 고양이 일러스트로 표시한다.
+    if state.place == .away { return "walk" }
+    return nil
 }
 
 private func resolvedSymbolName(for state: PlaceActivityAttributes.ContentState) -> String {
@@ -35,7 +37,8 @@ private func resolvedSymbolName(for state: PlaceActivityAttributes.ContentState)
 }
 
 // 잠금화면/확장 영역처럼 공간이 넉넉한 곳에서 쓰는 실제 일러스트.
-// 원본이 가로로 넓은 장면 그림(1672x941)이라 아주 작은 영역에서는 캐릭터가 안 보일 수 있음.
+// 일러스트 에셋은 투명 배경(흰 채움 + 검은 외곽선) 라인아트라, 어두운 배경에서는 흰 고양이로,
+// 밝은 배경에서는 외곽선 그림으로 읽힌다. 위젯 영역은 항상 어두운 배경이라 흰 고양이로 보인다.
 private struct PlaceImage: View {
     let state: PlaceActivityAttributes.ContentState
 
@@ -57,20 +60,18 @@ struct PlaceWidgetLiveActivity: Widget {
         ActivityConfiguration(for: PlaceActivityAttributes.self) { context in
             HStack(spacing: 12) {
                 PlaceImage(state: context.state)
-                    .frame(width: 44, height: 44)
+                    .frame(width: 46, height: 46)
                 Text(context.state.label)
                     .font(.headline)
                 Spacer()
             }
             .padding()
-            .activityBackgroundTint(Color.black)
-            .activitySystemActionForegroundColor(Color.white)
 
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
                     PlaceImage(state: context.state)
-                        .frame(width: 32, height: 32)
+                        .frame(width: 46, height: 46)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     Text(context.state.label)
@@ -78,13 +79,13 @@ struct PlaceWidgetLiveActivity: Widget {
                 }
             } compactLeading: {
                 PlaceImage(state: context.state)
-                    .frame(width: 22, height: 22)
+                    .frame(width: 30, height: 30) // 알약 높이 36.67pt 기준 실질 최대치(그 이상은 상하 잘림)
             } compactTrailing: {
                 Text(context.state.label)
                     .font(.caption2)
             } minimal: {
                 PlaceImage(state: context.state)
-                    .frame(width: 22, height: 22)
+                    .frame(width: 30, height: 30) // 알약 높이 36.67pt 기준 실질 최대치(그 이상은 상하 잘림)
             }
         }
     }

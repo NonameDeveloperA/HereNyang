@@ -55,7 +55,7 @@ struct ContentView: View {
                 Section("장소 (최대 \(PlaceStore.maxCount)개, 이름 \(PlaceStore.maxNameLength)자)") {
                     ForEach(placeStore.places) { place in
                         HStack {
-                            IconPickerButton(selectedIcon: place.icon) { newIcon in
+                            IconPickerButton(selectedIcon: place.icon, onOpen: { focusedField = nil }) { newIcon in
                                 placeStore.updateIcon(id: place.id, icon: newIcon)
                             }
                             .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
@@ -81,6 +81,7 @@ struct ContentView: View {
                         .id(FocusField.place(place.id))
                         .contextMenu {
                             Button {
+                                focusedField = nil
                                 mapPickerPlace = place
                             } label: {
                                 Label("지도에서 선택", systemImage: "map")
@@ -203,6 +204,16 @@ struct ContentView: View {
                     .listRowSeparator(.hidden)
             }
             .navigationTitle("여기냥 HereNyang")
+            // List는 빈 곳/버튼을 눌러도 키보드가 자동으로 안 닫힌다.
+            //  - 스크롤(살짝만 드래그해도) 시 즉시 닫힘
+            //  - 키보드 위 "완료" 버튼으로 항상 확실하게 닫을 수 있게
+            .scrollDismissesKeyboard(.immediately)
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("완료") { focusedField = nil }
+                }
+            }
             .sheet(item: $mapPickerPlace) { place in
                 MapLocationPickerSheet(place: place, locationManager: locationManager) { coordinate in
                     locationManager.saveLocation(coordinate, for: place.id)

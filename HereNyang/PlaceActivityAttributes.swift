@@ -21,7 +21,7 @@ struct PlaceActivityAttributes: ActivityAttributes {
 }
 
 // 장소 아이콘은 SF Symbol(icon 탭)이나 번들 일러스트(image 탭, PlaceWidget/HereNyang 양쪽
-// Assets.xcassets에 같은 이름으로 들어있는 "home"/"work" 이미지) 둘 중 하나를 가리킬 수 있다.
+// Assets.xcassets에 같은 이름으로 들어있는 home/work/walk/drive 이미지) 둘 중 하나를 가리킬 수 있다.
 enum PlaceIconKind: String, Codable, Hashable {
     case symbol
     case image

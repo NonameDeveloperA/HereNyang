@@ -10,12 +10,17 @@ import SwiftUI
 
 struct IconPickerButton: View {
     let selectedIcon: PlaceIcon
+    // 팝오버를 띄우기 직전에 호출. 이름 입력칸에 포커스가 남아있으면 팝오버가 뜨면서
+    // 키보드만 내려가고 @FocusState는 그대로라 이후 키보드가 안 닫히는 상태가 되므로,
+    // 여기서 포커스를 먼저 정리한다.
+    var onOpen: (() -> Void)? = nil
     let onSelect: (PlaceIcon) -> Void
 
     @State private var showingPicker = false
 
     var body: some View {
         Button {
+            onOpen?()
             showingPicker = true
         } label: {
             IconThumbnail(icon: selectedIcon, size: 32)

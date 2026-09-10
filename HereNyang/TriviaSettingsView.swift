@@ -40,8 +40,7 @@ struct TriviaSettingsView: View {
                 } header: {
                     Text("상식/유머")
                 } footer: {
-                    // SwiftUI Text(String)는 마크다운으로 파싱돼서, "~"가 두 번 들어간 문장은
-                    // 그 사이 구간이 취소선(GFM 문법)으로 잘못 렌더링된다. Text(verbatim:)로 우회.
+
                     Text(verbatim: store.isEnabled ? "상식과 유머를 내마음대로 말한다냥." : "꺼두면 조용히 있는다냥.")
                 }
 
