@@ -6,6 +6,13 @@
 //  GPS를 계속 추적하는 게 아니라 iOS가 배터리 효율적으로 관리하는 region monitoring에
 //  의존하기 때문에, 앱이 백그라운드거나 종료된 상태에서도 진입/이탈 시점에만 깨어난다.
 //
+//  region 이벤트는 원래 분 단위로 늦게 오고, 실내/LTE(Wi‑Fi off)처럼 측위 정확도가 나쁜
+//  환경에서는 아예 안 올 수도 있다. 그래서 아래를 함께 쓴다.
+//   - 지오펜스 반경을 측위 불확실성보다 넉넉하게(150m) 잡는다.
+//   - 유의미한 위치 변화(significant location change)도 같이 감시해서 깨어날 기회를 늘린다.
+//   - 앱이 앞으로 올라오거나 위치 fix가 들어올 때마다 저장 장소와 직접 거리 비교해서
+//     즉시 상태/Live Activity를 맞춘다(region 이벤트를 기다리지 않는다).
+//
 
 import Combine
 import CoreLocation
@@ -13,7 +20,15 @@ import Foundation
 
 @MainActor
 final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
-    static let regionRadius: CLLocationDistance = 50
+    // 백그라운드(지오펜스/유의미한 위치 변화)로 앱이 깨어날 때도 델리게이트가 곧바로
+    // 살아있어야 이벤트를 놓치지 않는다. 그래서 화면(View)이 아니라 앱 전역에서 하나만
+    // 들고 있고, AppDelegate가 앱 시작 즉시 이걸 생성한다.
+    static let shared = LocationManager()
+
+    // 지오펜스 반경. iOS는 측위 불확실성(horizontal accuracy)이 이 값보다 작아야 경계
+    // 통과를 "확신"하고 진입/이탈 이벤트를 쏜다. 실내나 LTE 환경에서는 불확실성이 쉽게
+    // 100m를 넘기 때문에, 반경을 너무 좁히면(예: 50m) 이벤트가 아주 늦거나 안 온다.
+    static let regionRadius: CLLocationDistance = 150
 
     @Published private(set) var authorizationStatus: CLAuthorizationStatus
     @Published private(set) var currentPlace: Place = .unknown
@@ -28,14 +43,24 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     private var oneTimeLocationCompletion: ((CLLocationCoordinate2D) -> Void)?
     // 진입 이벤트가 반복해서 들어올 때 같은 장소로의 재알림을 막기 위한 현재 위치 region 식별자.
     private var currentRegionID: String?
+    // 지금 머무는 장소의 아이콘. 이름/아이콘이 실제로 바뀐 경우에만 Live Activity를 갱신하려고 들고 있다.
+    private var currentIcon: PlaceIcon?
+    // 정밀 위치 요청이 짧은 시간에 폭주하지 않도록 하는 마지막 요청 시각.
+    private var lastPreciseFixRequest: Date?
     private var placesCancellable: AnyCancellable?
 
-    override init() {
+    private override init() {
         authorizationStatus = manager.authorizationStatus
         super.init()
         manager.delegate = self
-        manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+        // 저장 좌표 정확도와 region 이벤트 신뢰도를 위해 100m -> 10m급으로 올린다.
+        manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
         refreshRegions()
+        startSignificantChangeMonitoringIfPossible()
+        // 앱을 켠 시점(또는 지오펜스로 깨어난 시점)의 현재 위치를 한 번 받아서, region 이벤트를
+        // 기다리지 않고 곧바로 상태를 맞춘다. requestState는 방금 startMonitoring한 직후라
+        // 대개 .unknown을 돌려주기 때문에 이 fix가 실질적인 초기 판단 근거가 된다.
+        requestPreciseFix()
 
         // 지금 머물러 있는 장소의 이름/아이콘이 바뀌면(진입/이탈 이벤트 없이도) Live Activity에
         // 바로 반영되도록, 장소 목록이 바뀔 때마다 현재 장소 기준으로 다시 밀어준다.
@@ -55,7 +80,10 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     private func refreshCurrentPlaceIfNeeded() {
         guard let regionID = currentRegionID,
               let place = PlaceStore.shared.place(withRegionIdentifier: regionID) else { return }
+        // 이름·아이콘이 실제로 바뀐 게 아니면 Live Activity를 건드리지 않는다(불필요한 재생성 방지).
+        guard place.name != currentLabel || place.icon != currentIcon else { return }
         currentLabel = place.name
+        currentIcon = place.icon
         // update()만 부르면 이미지가 바뀌었을 때 반영이 몇 번 왔다갔다 해야 될 정도로 늦거나
         // 아예 갱신이 안 되는 경우가 있어서(시스템 쪽 렌더링 캐시 문제로 추정), 아이콘/이름이
         // 바뀔 때는 항상 끝내고 새로 시작해서 즉시 반영되게 한다.
@@ -80,6 +108,16 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         guard let regionID = currentRegionID,
               let place = PlaceStore.shared.place(withRegionIdentifier: regionID) else { return }
         LiveActivityController.shared.restart(place: .saved, label: place.name, icon: place.icon)
+    }
+
+    // 앱이 앞으로 올라올 때(scenePhase == .active) 호출. region 이벤트를 기다리지 않고
+    // 지금 위치를 다시 받아서 즉시 상태를 맞춘다.
+    func refreshOnForeground() {
+        guard isAuthorized else { return }
+        requestPreciseFix()
+        for region in manager.monitoredRegions {
+            manager.requestState(for: region)
+        }
     }
 
     // MARK: - 장소 위치 저장 / 삭제
@@ -109,6 +147,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         refreshRegions()
         if wasCurrent {
             currentRegionID = nil
+            currentIcon = nil
             currentPlace = .away
             currentLabel = Place.away.displayName
             LiveActivityController.shared.update(place: .away, label: Place.away.displayName)
@@ -122,7 +161,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
     // 서로 다른 두 장소가 반경(regionRadius) 이상 겹치면 두 지오펜스가 동시에 걸쳐 있는 지점이 생겨서,
     // 그 지점에 들어갈 때 두 region의 진입 이벤트가 번갈아 발생해 알림/Live Activity가
-    // 여러 번 울리는 문제가 생긴다. 그래서 두ㄴ 반경이 절대 겹치지 않는 거리(반경의 2배)보다
+    // 여러 번 울리는 문제가 생긴다. 그래서 두 반경이 절대 겹치지 않는 거리(반경의 2배)보다
     // 가까우면 저장을 거부한다.
     private func trySaveLocation(_ coordinate: CLLocationCoordinate2D, for placeID: UUID) {
         let newLocation = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
@@ -139,6 +178,17 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     }
 
     // MARK: - 지오펜스
+
+    private var isAuthorized: Bool {
+        authorizationStatus == .authorizedAlways || authorizationStatus == .authorizedWhenInUse
+    }
+
+    private func startSignificantChangeMonitoringIfPossible() {
+        guard CLLocationManager.significantLocationChangeMonitoringAvailable() else { return }
+        // 유의미한 위치 변화 감시는 "항상 허용"에서만 동작한다.
+        guard authorizationStatus == .authorizedAlways else { return }
+        manager.startMonitoringSignificantLocationChanges()
+    }
 
     private func refreshRegions() {
         for region in manager.monitoredRegions {
@@ -159,10 +209,85 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         return region
     }
 
+    // 지금 위치를 한 번 정밀하게 받아온다. 짧은 시간(10초)에 중복 호출되면 무시한다.
+    private func requestPreciseFix() {
+        guard isAuthorized else { return }
+        if let last = lastPreciseFixRequest, Date().timeIntervalSince(last) < 10 { return }
+        lastPreciseFixRequest = Date()
+        manager.requestLocation()
+    }
+
+    // MARK: - 상태 판정
+
+    // 들어온 위치 fix를 저장 장소들과 직접 비교해서 진입/이탈을 즉시 판정한다.
+    // region 이벤트가 늦거나 안 오는 상황(실내/LTE)을 보완하는 경로.
+    private func evaluate(_ location: CLLocation) {
+        // 측위 정확도가 반경보다 나쁘면 이 값으로는 판단하지 않고, 더 정밀한 fix를 한 번 더 요청한다.
+        guard location.horizontalAccuracy >= 0, location.horizontalAccuracy <= Self.regionRadius else {
+            requestPreciseFix()
+            return
+        }
+
+        let ranked = PlaceStore.shared.places.compactMap { place -> (place: SavedPlace, distance: CLLocationDistance)? in
+            guard let coordinate = place.coordinate else { return nil }
+            let center = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+            return (place, location.distance(from: center))
+        }
+
+        // 반경 안에 들어오는 저장 장소가 있으면(가장 가까운 것으로) 진입 처리.
+        if let nearest = ranked
+            .filter({ $0.distance <= Self.regionRadius })
+            .min(by: { $0.distance < $1.distance }) {
+            enter(regionIdentifier: nearest.place.regionIdentifier)
+            return
+        }
+
+        // 어느 장소에도 안 들어오는 경우: 지금 "머무는 중"으로 인식된 장소에서 확실히
+        // 벗어났을 때만(경계 근처 흔들림 방지로 반경의 1.5배 밖) 이동 중으로 정리한다.
+        guard currentPlace == .saved, let regionID = currentRegionID else { return }
+        if let current = ranked.first(where: { $0.place.regionIdentifier == regionID }) {
+            if current.distance > Self.regionRadius * 1.5 {
+                leaveToAway()
+            }
+        } else {
+            // 현재 장소의 좌표가 사라졌거나(위치 삭제) 목록에서 빠졌다.
+            leaveToAway()
+        }
+    }
+
+    private func enter(regionIdentifier: String) {
+        // GPS가 반경 경계 근처에서 흔들리면 진입이 반복 감지될 수 있어서,
+        // 이미 같은 장소로 인식된 상태면 알림/Live Activity를 다시 갱신하지 않는다.
+        guard currentRegionID != regionIdentifier else { return }
+        guard let place = PlaceStore.shared.place(withRegionIdentifier: regionIdentifier),
+              place.coordinate != nil else { return }
+        currentRegionID = regionIdentifier
+        currentPlace = .saved
+        currentLabel = place.name
+        currentIcon = place.icon
+        NotificationManager.shared.sendArrivalNotification(label: place.name, icon: place.icon)
+        LiveActivityController.shared.update(place: .saved, label: place.name, icon: place.icon)
+    }
+
+    private func leaveToAway() {
+        guard currentPlace != .away else { return }
+        currentRegionID = nil
+        currentIcon = nil
+        currentPlace = .away
+        currentLabel = Place.away.displayName
+        LiveActivityController.shared.update(place: .away, label: Place.away.displayName)
+    }
+
     // MARK: - CLLocationManagerDelegate
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         authorizationStatus = manager.authorizationStatus
+        startSignificantChangeMonitoringIfPossible()
+        if isAuthorized {
+            // 권한이 이제 막 생겼으면 그 전에는 등록조차 안 됐던 지오펜스를 다시 건다.
+            refreshRegions()
+            requestPreciseFix()
+        }
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
@@ -175,6 +300,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
             oneTimeLocationCompletion = nil
             completion(location.coordinate)
         }
+        evaluate(location)
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
@@ -199,7 +325,8 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         case .outside:
             handleExit(region: region)
         case .unknown:
-            break
+            // 아직 캐시된 위치가 없어 판단 불가. 정밀 fix를 받아서 evaluate()로 판단한다.
+            requestPreciseFix()
         @unknown default:
             break
         }
@@ -210,23 +337,13 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     }
 
     private func handleEnter(region: CLRegion) {
-        // GPS가 반경 경계 근처에서 흔들리면 진입 이벤트가 반복해서 들어올 수 있어서,
-        // 이미 같은 장소(같은 region)로 인식된 상태면 알림/Live Activity를 다시 갱신하지 않는다.
-        guard currentRegionID != region.identifier else { return }
-        guard let place = PlaceStore.shared.place(withRegionIdentifier: region.identifier) else { return }
-        currentRegionID = region.identifier
-        currentPlace = .saved
-        currentLabel = place.name
-        NotificationManager.shared.sendArrivalNotification(label: place.name, icon: place.icon)
-        LiveActivityController.shared.update(place: .saved, label: place.name, icon: place.icon)
+        enter(regionIdentifier: region.identifier)
     }
 
     private func handleExit(region: CLRegion) {
         guard PlaceStore.shared.place(withRegionIdentifier: region.identifier) != nil else { return }
-        guard currentPlace != .away else { return }
-        currentRegionID = nil
-        currentPlace = .away
-        currentLabel = Place.away.displayName
-        LiveActivityController.shared.update(place: .away, label: Place.away.displayName)
+        // 지금 머문다고 인식한 장소에서 나가는 경우거나, 아직 아무 장소도 인식 못 한 상태일 때만.
+        guard currentRegionID == region.identifier || currentRegionID == nil else { return }
+        leaveToAway()
     }
 }

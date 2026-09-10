@@ -11,14 +11,15 @@ import SwiftUI
 
 // 시뮬레이터/기기에 실제로 최신 빌드가 설치됐는지 눈으로 바로 확인하기 위한 마커.
 // 코드 수정할 때마다 이 문자열을 갱신함.
-private let buildMarker = "Build 2026-08-25"
+private let buildMarker = "Build 2026-09-10"
 
 private enum FocusField: Hashable {
     case place(UUID)
 }
 
 struct ContentView: View {
-    @StateObject private var locationManager = LocationManager()
+    // 소유는 앱 전역(AppDelegate가 생성). 여기서는 상태 변화만 구독한다.
+    @ObservedObject private var locationManager = LocationManager.shared
     @ObservedObject private var placeStore = PlaceStore.shared
     // 이름은 개수가 가변적이라 id별 임시 입력값을 들고 있다가 제출/포커스 이탈 시점에만
     // 스토어에 반영한다. (한글 조합 중간값 저장 방지)
